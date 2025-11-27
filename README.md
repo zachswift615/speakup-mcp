@@ -1,6 +1,6 @@
-# Claude TTS MCP Server
+# SpeakUp MCP Server
 
-An MCP server that gives Claude Code text-to-speech capabilities using sherpa-onnx with Piper voices.
+An MCP server that gives Claude Code (or any other coding agent) text-to-speech capabilities using sherpa-onnx with Piper voices.
 
 ## Features
 
