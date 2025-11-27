@@ -46,7 +46,7 @@ rm vits-piper-en_US-lessac-medium.tar.bz2
 
 ## Claude Code Configuration
 
-Add to `~/.claude/settings.json`:
+Add to `~/.claude/settings.json` or each project's `.mcp.json`:
 
 ```json
 {
