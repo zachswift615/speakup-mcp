@@ -1,76 +1,107 @@
 # SpeakUp MCP Server
 
-An MCP server that gives Claude Code (or any other coding agent) text-to-speech capabilities using sherpa-onnx with Piper voices.
+An MCP server that gives Claude Code text-to-speech capabilities with support for multiple simultaneous instances, message queuing, and a web UI for monitoring.
 
 ## Features
 
-- **`speak`** tool - synthesize and play text with emotional tones
-- **`stop`** tool - interrupt current speech
-- **5 tones**: neutral, excited, concerned, calm, urgent
-- **Interruptible** - new speech can stop current playback
-- **Speed control** - 0.5x to 2.0x speech rate
+- **Centralized queue** - Multiple Claude Code instances share one audio output, no overlapping
+- **Project identification** - Each message announces which project it's from
+- **Web UI** - Monitor queue, history, and stop playback at http://localhost:7849
+- **CLI control** - `speakup status`, `speakup stop`, `speakup history`
+- **5 emotional tones** - neutral, excited, concerned, calm, urgent
+- **Streaming playback** - Audio starts immediately, doesn't wait for full synthesis
+- **Persistent history** - SQLite storage of all messages
+
+## Architecture
+
+```
+Claude Code #1        Claude Code #2        Claude Code #3
+     │                     │                     │
+     ▼                     ▼                     ▼
+MCP Server #1         MCP Server #2         MCP Server #3
+(thin client)         (thin client)         (thin client)
+     │                     │                     │
+     └─────────────────────┼─────────────────────┘
+                           ▼
+              ┌────────────────────────┐
+              │   SpeakUp Service      │
+              │   localhost:7849       │
+              │   ─────────────────    │
+              │   • FIFO queue         │
+              │   • SQLite history     │
+              │   • Web UI             │
+              │   • Streaming playback │
+              └────────────────────────┘
+```
 
 ## Quick Setup
 
 ```bash
-# Install dependencies
+# Clone and install
+git clone https://github.com/zachswift615/speakup-mcp.git
+cd speakup-mcp
 pip install -e .
 
-# Run the setup script to download voice files (~70MB)
+# Download voice files (~70MB)
 python scripts/setup.py
-```
-
-## Manual Installation
-
-```bash
-# Install from source
-pip install -e .
-
-# Or install dev dependencies for testing
-pip install -e ".[dev]"
-```
-
-## Voice Setup (Manual)
-
-If you prefer manual setup, the server expects voices in `~/.claude-tts/voices/`.
-
-### Download the default voice (en_US-lessac-medium)
-
-```bash
-mkdir -p ~/.claude-tts/voices/en_US-lessac-medium
-cd ~/.claude-tts/voices/en_US-lessac-medium
-curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2
-tar -xjf vits-piper-en_US-lessac-medium.tar.bz2 --strip-components=1
-rm vits-piper-en_US-lessac-medium.tar.bz2
 ```
 
 ## Claude Code Configuration
 
-Add to `~/.claude/settings.json` or each project's `.mcp.json`:
+Add to your project's `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "tts": {
       "command": "python",
-      "args": ["-m", "claude_tts_mcp.server"]
+      "args": ["-m", "claude_tts_mcp.server"],
+      "env": {
+        "SPEAKUP_PROJECT": "my-project-name",
+        "SPEAKUP_ANNOUNCE": "prefix"
+      }
     }
   }
 }
 ```
 
-Or if using uvx:
+### Environment Variables
 
-```json
-{
-  "mcpServers": {
-    "tts": {
-      "command": "uvx",
-      "args": ["--from", "/path/to/ai_voice", "claude-tts-mcp"]
-    }
-  }
-}
+| Variable | Values | Description |
+|----------|--------|-------------|
+| `SPEAKUP_PROJECT` | any string | Project name shown in messages (default: "claude") |
+| `SPEAKUP_ANNOUNCE` | `prefix`, `full`, `none` | How to announce the project |
+
+**Announce modes:**
+- `prefix` - "my-project: Hello world" (default)
+- `full` - "This is Claude from my-project: Hello world"
+- `none` - "Hello world" (no announcement)
+
+## CLI Commands
+
+```bash
+# Service management
+speakup service start     # Start the background service
+speakup service stop      # Stop the service
+speakup service status    # Check if service is running
+
+# Playback control
+speakup stop              # Stop current playback and clear queue
+speakup status            # Show what's playing and queued
+speakup history           # Show recent messages
+speakup history -n 50     # Show last 50 messages
 ```
+
+## Web UI
+
+Open http://localhost:7849 to see:
+
+- **Now Playing** - Current message being spoken
+- **Queue** - Messages waiting to play
+- **History** - Recent messages with status (played/skipped)
+- **Stop All** button - Stop playback and clear queue
+
+The service auto-starts when the first MCP tool is invoked.
 
 ## Usage
 
@@ -89,9 +120,19 @@ speak(text="Found 3 errors", tone="concerned")
 # Fast speech
 speak(text="Quick update", speed=1.5)
 
-# Stop current speech
+# Stop current speech and clear queue
 stop()
 ```
+
+### Tones
+
+| Tone | Effect |
+|------|--------|
+| `neutral` | Default, clear speech |
+| `excited` | More variation, slightly faster |
+| `concerned` | Steadier, slower |
+| `calm` | Very steady, relaxed pace |
+| `urgent` | Energetic, fast |
 
 ## CLAUDE.md Integration
 
@@ -127,57 +168,72 @@ Use `mcp__tts__stop_tool` to stop speech mid-playback.
 
 ## Why Use This?
 
-### Token Efficient
+### Multi-Instance Support
 
-The MCP interface is designed to be minimal:
-- **Tool definitions**: ~60 words total for both tools
-- **Responses**: `{"success": true, "duration_ms": 1234}` (~40 characters)
-
-No verbose payloads, no unnecessary metadata - just the essentials.
+Running multiple Claude Code windows? Messages queue up instead of talking over each other. Each message is prefixed with its project name so you know which instance is speaking.
 
 ### Subagent Visibility
 
-When using subagent-driven development, you typically have limited visibility into what agents are doing. With TTS instructions in your CLAUDE.md, subagents announce their progress as they work - giving you real-time audio feedback on task execution without needing to watch the terminal.
+When using subagent-driven development, you typically have limited visibility into what agents are doing. With TTS instructions in your CLAUDE.md, subagents announce their progress as they work - giving you real-time audio feedback without watching the terminal.
+
+### Token Efficient
+
+The MCP interface is minimal:
+- **Responses**: `{"success": true, "message_id": 1, "queue_position": 0}`
+
+No verbose payloads, no unnecessary metadata.
 
 ### Streaming Playback
 
 Audio begins playing immediately as it's synthesized, rather than waiting for full generation. This reduces time-to-first-sound significantly for longer text.
 
-### Tones
+## Data Storage
 
-| Tone | Effect |
-|------|--------|
-| `neutral` | Default, clear speech |
-| `excited` | More variation, slightly faster |
-| `concerned` | Steadier, slower |
-| `calm` | Very steady, relaxed pace |
-| `urgent` | Energetic, fast |
+- **History database**: `~/.speakup/history.db` (SQLite)
+- **Service PID file**: `~/.speakup/service.pid`
+- **Voice models**: `~/.claude-tts/voices/`
+
+## Manual Voice Setup
+
+If you prefer manual setup, download the default voice:
+
+```bash
+mkdir -p ~/.claude-tts/voices/en_US-lessac-medium
+cd ~/.claude-tts/voices/en_US-lessac-medium
+curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2
+tar -xjf vits-piper-en_US-lessac-medium.tar.bz2 --strip-components=1
+rm vits-piper-en_US-lessac-medium.tar.bz2
+```
 
 ## Development
 
 ```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
 # Run tests
 pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_tone_mapper.py -v
 ```
 
 ## Project Structure
 
 ```
 src/claude_tts_mcp/
-├── server.py           # MCP server entry point
-├── tone_mapper.py      # Tone → parameter mapping
-├── sherpa_engine.py    # sherpa-onnx wrapper
+├── server.py           # MCP server (thin client)
+├── service.py          # Background service with HTTP API + Web UI
+├── cli.py              # CLI commands (speakup)
+├── queue_manager.py    # Message queue and playback coordination
+├── history.py          # SQLite history storage
 ├── streaming_player.py # Streaming audio playback
-└── voice_manager.py    # Voice path management
+├── sherpa_engine.py    # sherpa-onnx TTS wrapper
+├── tone_mapper.py      # Tone → synthesis parameters
+└── voice_manager.py    # Voice model management
 ```
 
 ## Requirements
 
 - Python 3.10+
-- macOS, Linux, or Windows
+- macOS (Linux/Windows support planned)
 - Audio output device
 
 ## License
