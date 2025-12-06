@@ -5,8 +5,12 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/zachswift615/speakup-mcp/main/install.sh | bash
 #
-# Or after cloning:
-#   ./install.sh
+# Options:
+#   --source    Force source installation (skip binary download)
+#
+# The installer will:
+#   1. Try to download pre-built binary (fast, ~140MB, no Python needed)
+#   2. Fall back to source installation if binary not available
 #
 
 set -e
@@ -20,9 +24,17 @@ NC='\033[0m' # No Color
 
 # Configuration
 SPEAKUP_HOME="${SPEAKUP_HOME:-$HOME/.speakup}"
-INSTALL_DIR="$SPEAKUP_HOME/src"
-REPO_URL="https://github.com/zachswift615/speakup-mcp.git"
 BIN_DIR="$HOME/.local/bin"
+REPO_URL="https://github.com/zachswift615/speakup-mcp"
+RELEASE_URL="$REPO_URL/releases/latest/download"
+
+# Parse arguments
+FORCE_SOURCE=false
+for arg in "$@"; do
+    case $arg in
+        --source) FORCE_SOURCE=true ;;
+    esac
+done
 
 echo -e "${BLUE}"
 echo "╔═══════════════════════════════════════════════════════════╗"
@@ -30,33 +42,24 @@ echo "║              SpeakUp MCP Server Installer                 ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# Detect OS
-OS="$(uname -s)"
-case "$OS" in
-    Darwin) OS="macos" ;;
-    Linux)  OS="linux" ;;
-    *)      echo -e "${RED}Unsupported OS: $OS${NC}"; exit 1 ;;
-esac
+# Detect OS and architecture
+detect_platform() {
+    OS="$(uname -s)"
+    ARCH="$(uname -m)"
 
-echo -e "${BLUE}►${NC} Detected OS: $OS"
+    case "$OS" in
+        Darwin) OS="macos" ;;
+        Linux)  OS="linux" ;;
+        *)      echo -e "${RED}Unsupported OS: $OS${NC}"; exit 1 ;;
+    esac
 
-# Check for Python 3.10+
-check_python() {
-    if command -v python3 &> /dev/null; then
-        PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-        MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)
-        MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)
+    case "$ARCH" in
+        x86_64)       ARCH="x64" ;;
+        arm64|aarch64) ARCH="arm64" ;;
+        *)            echo -e "${RED}Unsupported architecture: $ARCH${NC}"; exit 1 ;;
+    esac
 
-        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 10 ]; then
-            echo -e "${GREEN}✓${NC} Python $PYTHON_VERSION found"
-            PYTHON_CMD="python3"
-            return 0
-        fi
-    fi
-
-    echo -e "${RED}✗${NC} Python 3.10+ required but not found"
-    echo "  Install Python 3.10+ and try again"
-    exit 1
+    echo -e "${BLUE}►${NC} Detected: $OS $ARCH"
 }
 
 # Check/create bin directory and PATH
@@ -65,7 +68,6 @@ setup_path() {
 
     # Check if already in PATH
     if [[ ":$PATH:" == *":$BIN_DIR:"* ]]; then
-        echo -e "${GREEN}✓${NC} $BIN_DIR already in PATH"
         return 0
     fi
 
@@ -96,62 +98,131 @@ setup_path() {
     fi
 
     export PATH="$BIN_DIR:$PATH"
-    echo -e "${GREEN}✓${NC} Added to PATH (restart terminal or run: source $SHELL_RC)"
+    echo -e "${GREEN}✓${NC} Added to PATH"
 }
 
-# Clone or update repository
-setup_repo() {
-    # Ensure parent directory exists
+# Try binary installation
+try_binary_install() {
+    if [ "$FORCE_SOURCE" = true ]; then
+        return 1
+    fi
+
+    echo -e "${YELLOW}►${NC} Checking for pre-built binary..."
+
+    if [ "$OS" = "macos" ]; then
+        DMG_NAME="SpeakUp-macos-${ARCH}.dmg"
+        DMG_URL="$RELEASE_URL/$DMG_NAME"
+
+        # Check if release exists
+        if ! curl -fsSL --head "$DMG_URL" >/dev/null 2>&1; then
+            echo -e "${YELLOW}  No pre-built binary available for $OS $ARCH${NC}"
+            return 1
+        fi
+
+        echo -e "${YELLOW}►${NC} Downloading $DMG_NAME (~140MB)..."
+        TMP_DMG="/tmp/SpeakUp.dmg"
+        curl -fL --progress-bar "$DMG_URL" -o "$TMP_DMG"
+
+        echo -e "${YELLOW}►${NC} Installing to /Applications..."
+        # Mount DMG
+        MOUNT_POINT="/tmp/speakup-mount"
+        hdiutil attach "$TMP_DMG" -mountpoint "$MOUNT_POINT" -quiet
+
+        # Remove old installation if exists
+        [ -d "/Applications/SpeakUp.app" ] && rm -rf "/Applications/SpeakUp.app"
+
+        # Copy app
+        cp -R "$MOUNT_POINT/SpeakUp.app" /Applications/
+
+        # Unmount and cleanup
+        hdiutil detach "$MOUNT_POINT" -quiet
+        rm -f "$TMP_DMG"
+
+        # Create CLI symlink
+        ln -sf /Applications/SpeakUp.app/Contents/MacOS/speakup "$BIN_DIR/speakup"
+
+        echo -e "${GREEN}✓${NC} Installed SpeakUp.app to /Applications"
+        return 0
+
+    else
+        # Linux
+        TARBALL_NAME="speakup-linux-${ARCH}.tar.gz"
+        TARBALL_URL="$RELEASE_URL/$TARBALL_NAME"
+
+        # Check if release exists
+        if ! curl -fsSL --head "$TARBALL_URL" >/dev/null 2>&1; then
+            echo -e "${YELLOW}  No pre-built binary available for $OS $ARCH${NC}"
+            return 1
+        fi
+
+        echo -e "${YELLOW}►${NC} Downloading $TARBALL_NAME (~140MB)..."
+
+        # Create installation directory
+        mkdir -p "$SPEAKUP_HOME"
+
+        # Download and extract
+        curl -fL --progress-bar "$TARBALL_URL" | tar -xz -C "$SPEAKUP_HOME"
+
+        # Create CLI symlink
+        ln -sf "$SPEAKUP_HOME/speakup/speakup" "$BIN_DIR/speakup"
+
+        echo -e "${GREEN}✓${NC} Installed to $SPEAKUP_HOME/speakup"
+        return 0
+    fi
+}
+
+# Source installation (fallback)
+source_install() {
+    echo -e "${YELLOW}►${NC} Installing from source..."
+
+    INSTALL_DIR="$SPEAKUP_HOME/src"
+
+    # Check for Python 3.10+
+    if ! command -v python3 &> /dev/null; then
+        echo -e "${RED}✗${NC} Python 3.10+ required but not found"
+        exit 1
+    fi
+
+    PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)
+    MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)
+
+    if [ "$MAJOR" -lt 3 ] || ([ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 10 ]); then
+        echo -e "${RED}✗${NC} Python 3.10+ required (found $PYTHON_VERSION)"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓${NC} Python $PYTHON_VERSION found"
+
+    # Clone or update repository
     mkdir -p "$SPEAKUP_HOME"
 
     if [ -d "$INSTALL_DIR/.git" ]; then
         echo -e "${YELLOW}►${NC} Updating existing installation..."
         cd "$INSTALL_DIR"
         git pull --quiet
-    elif [ -d "$INSTALL_DIR" ]; then
-        echo -e "${YELLOW}►${NC} Removing old installation..."
-        rm -rf "$INSTALL_DIR"
-        echo -e "${YELLOW}►${NC} Cloning repository to $INSTALL_DIR..."
-        git clone --quiet "$REPO_URL" "$INSTALL_DIR"
-        cd "$INSTALL_DIR"
     else
-        echo -e "${YELLOW}►${NC} Cloning repository to $INSTALL_DIR..."
-        git clone --quiet "$REPO_URL" "$INSTALL_DIR"
+        [ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR"
+        echo -e "${YELLOW}►${NC} Cloning repository..."
+        git clone --quiet "$REPO_URL.git" "$INSTALL_DIR"
         cd "$INSTALL_DIR"
     fi
-    echo -e "${GREEN}✓${NC} Repository ready"
-}
 
-# Create virtualenv and install
-setup_venv() {
+    # Create virtualenv and install
     echo -e "${YELLOW}►${NC} Creating virtual environment..."
-
-    if [ -d "$INSTALL_DIR/venv" ]; then
-        rm -rf "$INSTALL_DIR/venv"
-    fi
-
-    $PYTHON_CMD -m venv "$INSTALL_DIR/venv"
+    [ -d "$INSTALL_DIR/venv" ] && rm -rf "$INSTALL_DIR/venv"
+    python3 -m venv "$INSTALL_DIR/venv"
     source "$INSTALL_DIR/venv/bin/activate"
 
     echo -e "${YELLOW}►${NC} Installing dependencies..."
     pip install --quiet --upgrade pip
     pip install --quiet -e "$INSTALL_DIR"
 
-    echo -e "${GREEN}✓${NC} Dependencies installed"
-}
-
-# Download voice files
-setup_voice() {
+    # Download voice files
     echo -e "${YELLOW}►${NC} Downloading voice files (~70MB)..."
-    $PYTHON_CMD "$INSTALL_DIR/scripts/setup.py" 2>&1 | grep -E "(Downloading|Progress|installed|already)"
-    echo -e "${GREEN}✓${NC} Voice files ready"
-}
+    python3 "$INSTALL_DIR/scripts/setup.py" 2>&1 | grep -E "(Downloading|Progress|installed|already)" || true
 
-# Create CLI symlinks
-setup_cli() {
-    echo -e "${YELLOW}►${NC} Setting up CLI commands..."
-
-    # Create wrapper scripts that activate venv
+    # Create CLI wrapper
     cat > "$BIN_DIR/speakup" << EOF
 #!/bin/bash
 source "$INSTALL_DIR/venv/bin/activate"
@@ -159,25 +230,15 @@ exec python -m claude_tts_mcp.cli "\$@"
 EOF
     chmod +x "$BIN_DIR/speakup"
 
-    cat > "$BIN_DIR/speakup-service" << EOF
-#!/bin/bash
-source "$INSTALL_DIR/venv/bin/activate"
-exec python -m claude_tts_mcp.service "\$@"
-EOF
-    chmod +x "$BIN_DIR/speakup-service"
-
-    echo -e "${GREEN}✓${NC} CLI commands installed: speakup, speakup-service"
+    echo -e "${GREEN}✓${NC} Source installation complete"
 }
 
 # Start the service
 start_service() {
     echo -e "${YELLOW}►${NC} Starting SpeakUp service..."
-    source "$INSTALL_DIR/venv/bin/activate"
 
     # Stop existing service if running
-    if "$BIN_DIR/speakup" service status &>/dev/null; then
-        "$BIN_DIR/speakup" service stop &>/dev/null || true
-    fi
+    "$BIN_DIR/speakup" service stop &>/dev/null || true
 
     "$BIN_DIR/speakup" service start
 }
@@ -198,6 +259,7 @@ print_success() {
     echo "  speakup init my-project-name"
     echo ""
     echo -e "${BLUE}CLI Commands:${NC}"
+    echo "  speakup --version      # Show version and build info"
     echo "  speakup init <name>    # Set up TTS in a project"
     echo "  speakup status         # Show queue status"
     echo "  speakup stop           # Stop playback"
@@ -212,12 +274,17 @@ print_success() {
 
 # Main installation flow
 main() {
-    check_python
+    detect_platform
     setup_path
-    setup_repo
-    setup_venv
-    setup_voice
-    setup_cli
+
+    # Try binary first, fall back to source
+    if try_binary_install; then
+        echo -e "${GREEN}✓${NC} Binary installation successful"
+    else
+        echo -e "${YELLOW}►${NC} Falling back to source installation..."
+        source_install
+    fi
+
     start_service
     print_success
 }

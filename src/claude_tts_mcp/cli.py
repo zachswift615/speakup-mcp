@@ -12,6 +12,9 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from .service import DEFAULT_PORT, get_service_pid, PID_FILE
+from .voice_manager import is_bundled_mode, get_bundled_voices_dir
+
+__version__ = "1.0.0"
 
 SERVICE_URL = f"http://127.0.0.1:{DEFAULT_PORT}"
 
@@ -288,11 +291,35 @@ def cmd_init(args):
     return 0
 
 
+def get_version_info() -> str:
+    """Get detailed version information."""
+    lines = [f"SpeakUp v{__version__}"]
+
+    if is_bundled_mode():
+        bundled_dir = get_bundled_voices_dir()
+        lines.append("Build: Standalone binary")
+        if bundled_dir:
+            lines.append(f"Voices: {bundled_dir}")
+    else:
+        lines.append("Build: Python package")
+        lines.append("Voices: ~/.claude-tts/voices")
+
+    lines.append(f"Python: {sys.version.split()[0]}")
+    lines.append(f"Executable: {sys.executable}")
+
+    return "\n".join(lines)
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="speakup",
         description="SpeakUp TTS control"
+    )
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=get_version_info()
     )
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 

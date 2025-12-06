@@ -1,0 +1,418 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., v1.0.0)'
+        required: false
+        default: 'v0.0.0-dev'
+
+env:
+  APP_NAME: SpeakUp
+  PYTHON_VERSION: '3.12'  # Use 3.12 for better Nuitka compatibility
+
+jobs:
+  build-macos-arm64:
+    runs-on: macos-14  # Apple Silicon runner
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install nuitka ordered-set zstandard
+          pip install -e .
+
+      - name: Download voice files
+        run: |
+          chmod +x scripts/download-voices.sh
+          ./scripts/download-voices.sh
+
+      - name: Build with Nuitka
+        run: |
+          python -m nuitka \
+            --standalone \
+            --onefile-tempdir-spec="%CACHE_DIR%/speakup" \
+            --include-data-dir=build/voices=voices \
+            --include-package=claude_tts_mcp \
+            --include-package=sherpa_onnx \
+            --include-package=sounddevice \
+            --include-package=numpy \
+            --include-package=httpx \
+            --include-package=fastmcp \
+            --output-dir=build \
+            --output-filename=speakup \
+            --assume-yes-for-downloads \
+            --macos-create-app-bundle \
+            --macos-app-name=${{ env.APP_NAME }} \
+            --macos-app-icon=macos/speakup.icns \
+            src/claude_tts_mcp/cli.py
+
+      - name: Import Code Signing Certificate
+        env:
+          P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}
+        run: |
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import certificate
+          echo "$P12_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Sign Application
+        env:
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          # Find the app bundle created by Nuitka
+          APP_BUNDLE=$(find build -name "*.app" -type d | head -1)
+          echo "Signing: $APP_BUNDLE"
+
+          # Sign all frameworks and dylibs first
+          find "$APP_BUNDLE" -name "*.dylib" -o -name "*.so" | while read lib; do
+            codesign --force --options runtime \
+              --sign "$SIGNING_IDENTITY" \
+              --entitlements macos/speakup.entitlements \
+              "$lib"
+          done
+
+          # Sign the main executable
+          codesign --force --options runtime \
+            --sign "$SIGNING_IDENTITY" \
+            --entitlements macos/speakup.entitlements \
+            "$APP_BUNDLE/Contents/MacOS/"*
+
+          # Sign the app bundle
+          codesign --force --deep --options runtime \
+            --sign "$SIGNING_IDENTITY" \
+            --entitlements macos/speakup.entitlements \
+            "$APP_BUNDLE"
+
+          # Verify signature
+          codesign --verify --verbose "$APP_BUNDLE"
+
+      - name: Notarize Application
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP_BUNDLE=$(find build -name "*.app" -type d | head -1)
+
+          # Create zip for notarization
+          ditto -c -k --keepParent "$APP_BUNDLE" "build/$APP_NAME.zip"
+
+          # Submit for notarization
+          xcrun notarytool submit "build/$APP_NAME.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # Staple the notarization ticket
+          xcrun stapler staple "$APP_BUNDLE"
+
+      - name: Create DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME:-${{ github.event.inputs.version }}}"
+          VERSION="${VERSION#v}"
+
+          APP_BUNDLE=$(find build -name "*.app" -type d | head -1)
+          DMG_NAME="${APP_NAME}-macos-arm64-v${VERSION}.dmg"
+
+          # Create temp directory
+          mkdir -p build/dmg_temp
+          cp -R "$APP_BUNDLE" build/dmg_temp/
+          ln -s /Applications build/dmg_temp/Applications
+
+          # Create DMG
+          hdiutil create -volname "$APP_NAME $VERSION" \
+            -srcfolder build/dmg_temp \
+            -ov -format UDZO \
+            "build/$DMG_NAME"
+
+          rm -rf build/dmg_temp
+          echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: speakup-macos-arm64
+          path: build/${{ env.DMG_NAME }}
+
+      - name: Cleanup Keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+
+  build-macos-x64:
+    runs-on: macos-13  # Intel runner
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install nuitka ordered-set zstandard
+          pip install -e .
+
+      - name: Download voice files
+        run: |
+          chmod +x scripts/download-voices.sh
+          ./scripts/download-voices.sh
+
+      - name: Build with Nuitka
+        run: |
+          python -m nuitka \
+            --standalone \
+            --onefile-tempdir-spec="%CACHE_DIR%/speakup" \
+            --include-data-dir=build/voices=voices \
+            --include-package=claude_tts_mcp \
+            --include-package=sherpa_onnx \
+            --include-package=sounddevice \
+            --include-package=numpy \
+            --include-package=httpx \
+            --include-package=fastmcp \
+            --output-dir=build \
+            --output-filename=speakup \
+            --assume-yes-for-downloads \
+            --macos-create-app-bundle \
+            --macos-app-name=${{ env.APP_NAME }} \
+            --macos-app-icon=macos/speakup.icns \
+            src/claude_tts_mcp/cli.py
+
+      - name: Import Code Signing Certificate
+        env:
+          P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          echo "$P12_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Sign Application
+        env:
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          APP_BUNDLE=$(find build -name "*.app" -type d | head -1)
+
+          find "$APP_BUNDLE" -name "*.dylib" -o -name "*.so" | while read lib; do
+            codesign --force --options runtime \
+              --sign "$SIGNING_IDENTITY" \
+              --entitlements macos/speakup.entitlements \
+              "$lib"
+          done
+
+          codesign --force --options runtime \
+            --sign "$SIGNING_IDENTITY" \
+            --entitlements macos/speakup.entitlements \
+            "$APP_BUNDLE/Contents/MacOS/"*
+
+          codesign --force --deep --options runtime \
+            --sign "$SIGNING_IDENTITY" \
+            --entitlements macos/speakup.entitlements \
+            "$APP_BUNDLE"
+
+          codesign --verify --verbose "$APP_BUNDLE"
+
+      - name: Notarize Application
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP_BUNDLE=$(find build -name "*.app" -type d | head -1)
+
+          ditto -c -k --keepParent "$APP_BUNDLE" "build/$APP_NAME.zip"
+
+          xcrun notarytool submit "build/$APP_NAME.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          xcrun stapler staple "$APP_BUNDLE"
+
+      - name: Create DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME:-${{ github.event.inputs.version }}}"
+          VERSION="${VERSION#v}"
+
+          APP_BUNDLE=$(find build -name "*.app" -type d | head -1)
+          DMG_NAME="${APP_NAME}-macos-x64-v${VERSION}.dmg"
+
+          mkdir -p build/dmg_temp
+          cp -R "$APP_BUNDLE" build/dmg_temp/
+          ln -s /Applications build/dmg_temp/Applications
+
+          hdiutil create -volname "$APP_NAME $VERSION" \
+            -srcfolder build/dmg_temp \
+            -ov -format UDZO \
+            "build/$DMG_NAME"
+
+          rm -rf build/dmg_temp
+          echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: speakup-macos-x64
+          path: build/${{ env.DMG_NAME }}
+
+      - name: Cleanup Keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+
+  build-linux-x64:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf ccache libportaudio2
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install nuitka ordered-set zstandard
+          pip install -e .
+
+      - name: Download voice files
+        run: |
+          chmod +x scripts/download-voices.sh
+          ./scripts/download-voices.sh
+
+      - name: Build with Nuitka
+        run: |
+          python -m nuitka \
+            --standalone \
+            --include-data-dir=build/voices=voices \
+            --include-package=claude_tts_mcp \
+            --include-package=sherpa_onnx \
+            --include-package=sounddevice \
+            --include-package=numpy \
+            --include-package=httpx \
+            --include-package=fastmcp \
+            --output-dir=build \
+            --output-filename=speakup \
+            --assume-yes-for-downloads \
+            src/claude_tts_mcp/cli.py
+
+      - name: Package as tar.gz
+        run: |
+          VERSION="${GITHUB_REF_NAME:-${{ github.event.inputs.version }}}"
+          VERSION="${VERSION#v}"
+
+          # Move dist directory to speakup
+          mv build/cli.dist build/speakup
+
+          # Create tarball
+          TARBALL="speakup-linux-x64-v${VERSION}.tar.gz"
+          cd build
+          tar -czvf "$TARBALL" speakup
+          cd ..
+
+          echo "TARBALL=$TARBALL" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: speakup-linux-x64
+          path: build/${{ env.TARBALL }}
+
+  release:
+    needs: [build-macos-arm64, build-macos-x64, build-linux-x64]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: SpeakUp ${{ steps.version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/speakup-macos-arm64/*
+            artifacts/speakup-macos-x64/*
+            artifacts/speakup-linux-x64/*
+          body: |
+            ## SpeakUp ${{ steps.version.outputs.VERSION }}
+
+            Text-to-Speech for Claude Code - standalone binary release.
+
+            ### Installation
+
+            **macOS (Apple Silicon):**
+            ```bash
+            curl -fsSL https://github.com/zachswift615/speakup-mcp/releases/latest/download/install.sh | bash
+            ```
+
+            Or download the DMG and drag to Applications.
+
+            **Linux:**
+            ```bash
+            curl -fsSL https://github.com/zachswift615/speakup-mcp/releases/latest/download/install.sh | bash
+            ```
+
+            ### What's Included
+
+            - Standalone binary (no Python required)
+            - Default voice: en_US-lessac-medium
+            - espeak-ng phoneme data
+
+            ### Usage
+
+            ```bash
+            speakup --help
+            speakup init my-project
+            speakup service start
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
