@@ -19,7 +19,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-INSTALL_DIR="${SPEAKUP_INSTALL_DIR:-$HOME/.speakup}"
+SPEAKUP_HOME="${SPEAKUP_HOME:-$HOME/.speakup}"
+INSTALL_DIR="$SPEAKUP_HOME/src"
 REPO_URL="https://github.com/zachswift615/speakup-mcp.git"
 BIN_DIR="$HOME/.local/bin"
 
@@ -100,10 +101,19 @@ setup_path() {
 
 # Clone or update repository
 setup_repo() {
-    if [ -d "$INSTALL_DIR" ]; then
+    # Ensure parent directory exists
+    mkdir -p "$SPEAKUP_HOME"
+
+    if [ -d "$INSTALL_DIR/.git" ]; then
         echo -e "${YELLOW}►${NC} Updating existing installation..."
         cd "$INSTALL_DIR"
         git pull --quiet
+    elif [ -d "$INSTALL_DIR" ]; then
+        echo -e "${YELLOW}►${NC} Removing old installation..."
+        rm -rf "$INSTALL_DIR"
+        echo -e "${YELLOW}►${NC} Cloning repository to $INSTALL_DIR..."
+        git clone --quiet "$REPO_URL" "$INSTALL_DIR"
+        cd "$INSTALL_DIR"
     else
         echo -e "${YELLOW}►${NC} Cloning repository to $INSTALL_DIR..."
         git clone --quiet "$REPO_URL" "$INSTALL_DIR"

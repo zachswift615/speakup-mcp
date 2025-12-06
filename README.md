@@ -43,11 +43,11 @@ curl -fsSL https://raw.githubusercontent.com/zachswift615/speakup-mcp/main/insta
 ```
 
 This will:
-- Clone the repo to `~/.speakup`
+- Clone the repo to `~/.speakup/src`
 - Create a virtual environment
 - Install all dependencies
 - Download voice files (~70MB)
-- Add `speakup` CLI to your PATH
+- Add `speakup` CLI to your PATH (`~/.local/bin`)
 - Start the background service
 
 **Or install manually:**
