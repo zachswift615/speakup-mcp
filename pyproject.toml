@@ -13,6 +13,8 @@ dependencies = [
 
 [project.scripts]
 claude-tts-mcp = "claude_tts_mcp.server:main"
+speakup = "claude_tts_mcp.cli:main"
+speakup-service = "claude_tts_mcp.service:main"
 
 [build-system]
 requires = ["hatchling"]

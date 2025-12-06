@@ -1,43 +1,76 @@
-"""MCP Server for Claude TTS - speak and stop tools."""
+"""MCP Server for Claude TTS - thin client that talks to SpeakUp service."""
 
-from typing import Optional
+import json
+import os
+import subprocess
+import sys
+import time
+from urllib.error import URLError
+from urllib.request import Request, urlopen
+
 from fastmcp import FastMCP
 
-from .tone_mapper import ToneMapper
-from .streaming_player import StreamingPlayer
-from .sherpa_engine import SherpaEngine
-from .voice_manager import VoiceManager
+from .service import DEFAULT_PORT, get_service_pid
 
-# Global instances (initialized lazily)
-_voice_manager: Optional[VoiceManager] = None
-_engine: Optional[SherpaEngine] = None
-_player: Optional[StreamingPlayer] = None
-_tone_mapper: Optional[ToneMapper] = None
+SERVICE_URL = f"http://127.0.0.1:{DEFAULT_PORT}"
 
 
-def _init_globals():
-    """Initialize global instances if not already done."""
-    global _voice_manager, _engine, _player, _tone_mapper
+def _api_call(endpoint: str, method: str = "GET", data: dict = None, timeout: float = 30) -> dict:
+    """Make API call to service."""
+    url = f"{SERVICE_URL}{endpoint}"
+    headers = {"Content-Type": "application/json"}
 
-    if _tone_mapper is None:
-        _tone_mapper = ToneMapper()
+    if data:
+        body = json.dumps(data).encode()
+        req = Request(url, data=body, headers=headers, method=method)
+    else:
+        req = Request(url, headers=headers, method=method)
 
-    if _player is None:
-        _player = StreamingPlayer()
+    try:
+        with urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read())
+    except URLError as e:
+        return {"error": f"Service not reachable: {e}"}
+    except Exception as e:
+        return {"error": str(e)}
 
-    if _voice_manager is None:
-        _voice_manager = VoiceManager()
 
-    if _engine is None and _voice_manager is not None:
-        voice_name = _voice_manager.default_voice
-        if _voice_manager.is_voice_available(voice_name):
-            paths = _voice_manager.get_voice_paths(voice_name)
-            if paths:
-                _engine = SherpaEngine(
-                    model_path=str(paths["model"]),
-                    tokens_path=str(paths["tokens"]),
-                    data_dir=str(paths["data_dir"]),
-                )
+def _is_service_running() -> bool:
+    """Check if service is running and responsive."""
+    try:
+        result = _api_call("/api/health", timeout=2)
+        return result.get("status") == "ok"
+    except Exception:
+        return False
+
+
+def _start_service() -> bool:
+    """Start the service in background. Returns True if successful."""
+    if _is_service_running():
+        return True
+
+    # Start service in background
+    subprocess.Popen(
+        [sys.executable, "-m", "claude_tts_mcp.service"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    # Wait for it to start
+    for _ in range(40):  # 10 seconds max
+        time.sleep(0.25)
+        if _is_service_running():
+            return True
+
+    return False
+
+
+def _ensure_service() -> bool:
+    """Ensure service is running, starting it if needed."""
+    if _is_service_running():
+        return True
+    return _start_service()
 
 
 def speak(
@@ -55,35 +88,41 @@ def speak(
         interrupt: If True, stops any current speech before starting
 
     Returns:
-        Dict with success status and duration_ms
+        Dict with success status and queue position
     """
-    global _engine, _player, _tone_mapper
-
     # Handle empty text
     if not text.strip():
         return {"success": True, "duration_ms": 0}
 
-    # Check engine is loaded
-    if _engine is None or not _engine.is_loaded:
-        return {"success": False, "error": "TTS engine not loaded. Voice may not be installed."}
+    # Ensure service is running
+    if not _ensure_service():
+        return {"success": False, "error": "Failed to start SpeakUp service"}
 
-    # Stop current playback if requested
-    if interrupt and _player is not None and _player.is_playing():
-        _player.stop()
+    # Get configuration from environment
+    project = os.environ.get("SPEAKUP_PROJECT", "claude")
+    announce = os.environ.get("SPEAKUP_ANNOUNCE", "prefix")
 
-    # Get tone parameters
-    params = _tone_mapper.get_params(tone, speed=speed)
+    # Stop current playback if interrupt requested
+    if interrupt:
+        _api_call("/api/stop", method="POST")
 
-    # Start streaming player
-    _player.start(_engine.sample_rate)
+    # Send speak request to service
+    result = _api_call("/api/speak", method="POST", data={
+        "text": text,
+        "tone": tone,
+        "speed": speed,
+        "project": project,
+        "announce": announce,
+    })
 
-    # Synthesize with streaming - audio plays as it's generated
-    _engine.synthesize_streaming(text, params, callback=_player.feed)
+    if "error" in result:
+        return {"success": False, "error": result["error"]}
 
-    # Wait for playback to complete
-    duration_ms = _player.finish()
-
-    return {"success": True, "duration_ms": duration_ms}
+    return {
+        "success": True,
+        "message_id": result.get("message_id"),
+        "queue_position": result.get("queue_position", 0),
+    }
 
 
 def stop() -> dict:
@@ -92,12 +131,15 @@ def stop() -> dict:
     Returns:
         Dict with success status
     """
-    global _player
+    if not _is_service_running():
+        return {"success": True}
 
-    if _player is not None:
-        _player.stop()
+    result = _api_call("/api/stop", method="POST")
 
-    return {"success": True}
+    if "error" in result:
+        return {"success": False, "error": result["error"]}
+
+    return {"success": True, "cleared": result.get("cleared", 0)}
 
 
 def create_server() -> FastMCP:
@@ -106,8 +148,6 @@ def create_server() -> FastMCP:
     Returns:
         Configured FastMCP server instance
     """
-    _init_globals()
-
     mcp = FastMCP("claude-tts")
 
     @mcp.tool()
