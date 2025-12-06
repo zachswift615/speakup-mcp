@@ -36,22 +36,27 @@ MCP Server #1         MCP Server #2         MCP Server #3
 
 ## Quick Setup
 
+**One-line install:**
+
 ```bash
-# Clone the repo
-git clone https://github.com/zachswift615/speakup-mcp.git
-cd speakup-mcp
-
-# Install globally with pipx (recommended)
-pipx install -e .
-
-# Or install with pip (only available in current environment)
-pip install -e .
-
-# Download voice files (~70MB)
-python scripts/setup.py
+curl -fsSL https://raw.githubusercontent.com/zachswift615/speakup-mcp/main/install.sh | bash
 ```
 
-> **Note:** If you don't have pipx, install it with `brew install pipx` (macOS) or `pip install pipx`.
+This will:
+- Clone the repo to `~/.speakup`
+- Create a virtual environment
+- Install all dependencies
+- Download voice files (~70MB)
+- Add `speakup` CLI to your PATH
+- Start the background service
+
+**Or install manually:**
+
+```bash
+git clone https://github.com/zachswift615/speakup-mcp.git
+cd speakup-mcp
+./install.sh
+```
 
 ## Project Setup
 
