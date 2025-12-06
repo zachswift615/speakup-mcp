@@ -37,7 +37,7 @@ MCP Server #1         MCP Server #2         MCP Server #3
 ## Quick Setup
 
 ```bash
-# Clone and install
+# Clone and install globally
 git clone https://github.com/zachswift615/speakup-mcp.git
 cd speakup-mcp
 pip install -e .
@@ -46,9 +46,33 @@ pip install -e .
 python scripts/setup.py
 ```
 
-## Claude Code Configuration
+## Project Setup
 
-Add to your project's `.mcp.json`:
+In any project directory, run:
+
+```bash
+speakup init my-project-name
+```
+
+This will:
+1. Create/update `.mcp.json` with the TTS server config
+2. Create/update `.claude/CLAUDE.md` with usage instructions for Claude
+
+Then restart Claude Code to load the new config.
+
+### Options
+
+```bash
+# Use full announcements ("This is Claude from my-project: ...")
+speakup init my-project --announce full
+
+# Disable announcements
+speakup init my-project --announce none
+```
+
+## Manual Configuration
+
+If you prefer manual setup, add to your project's `.mcp.json`:
 
 ```json
 {
@@ -80,6 +104,10 @@ Add to your project's `.mcp.json`:
 ## CLI Commands
 
 ```bash
+# Project setup
+speakup init <project>    # Initialize SpeakUp in current directory
+speakup init <project> --announce full   # With full announcements
+
 # Service management
 speakup service start     # Start the background service
 speakup service stop      # Stop the service

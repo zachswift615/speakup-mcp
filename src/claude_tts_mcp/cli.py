@@ -7,12 +7,40 @@ import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from .service import DEFAULT_PORT, get_service_pid, PID_FILE
 
 SERVICE_URL = f"http://127.0.0.1:{DEFAULT_PORT}"
+
+CLAUDE_MD_SNIPPET = '''## Voice/TTS (Text-to-Speech)
+
+Use `mcp__tts__speak_tool` to speak to the user aloud. Use it liberally - for thinking
+out loud, narrating what you're doing, conversing naturally, or any time voice adds to
+the experience.
+
+**Parameters:**
+- `text` (required): What to say
+- `tone`: neutral | excited | concerned | calm | urgent (default: neutral)
+- `speed`: 0.5 to 2.0 (default: 1.0)
+- `interrupt`: Stop current speech before starting (default: true)
+
+**Example uses:**
+- Thinking through a problem out loud
+- Announcing task completion or updates
+- Reading errors or warnings aloud
+- Conversational back-and-forth
+
+**Tone guide:**
+- `calm` - explanations, walkthroughs
+- `urgent` - errors, critical issues
+- `excited` - successes, good news
+- `concerned` - warnings, risky operations
+
+Use `mcp__tts__stop_tool` to stop speech mid-playback.
+'''
 
 
 def api_call(endpoint: str, method: str = "GET", data: dict = None) -> dict:
@@ -196,6 +224,70 @@ def cmd_service(args):
             return 1
 
 
+def cmd_init(args):
+    """Initialize SpeakUp in a project directory."""
+    project_name = args.project_name
+    announce = args.announce or "prefix"
+    cwd = Path.cwd()
+
+    print(f"Initializing SpeakUp for project: {project_name}\n")
+
+    # 1. Create or update .mcp.json
+    mcp_path = cwd / ".mcp.json"
+    mcp_config = {}
+
+    if mcp_path.exists():
+        try:
+            mcp_config = json.loads(mcp_path.read_text())
+            print(f"Found existing .mcp.json")
+        except json.JSONDecodeError:
+            print(f"Warning: .mcp.json exists but is invalid JSON, will overwrite")
+            mcp_config = {}
+
+    # Ensure mcpServers key exists
+    if "mcpServers" not in mcp_config:
+        mcp_config["mcpServers"] = {}
+
+    # Add or update tts server config
+    mcp_config["mcpServers"]["tts"] = {
+        "command": "python",
+        "args": ["-m", "claude_tts_mcp.server"],
+        "env": {
+            "SPEAKUP_PROJECT": project_name,
+            "SPEAKUP_ANNOUNCE": announce
+        }
+    }
+
+    mcp_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
+    print(f"  Updated .mcp.json with TTS config")
+
+    # 2. Create or update .claude/CLAUDE.md
+    claude_dir = cwd / ".claude"
+    claude_md_path = claude_dir / "CLAUDE.md"
+
+    claude_dir.mkdir(exist_ok=True)
+
+    if claude_md_path.exists():
+        existing_content = claude_md_path.read_text()
+        if "mcp__tts__speak_tool" in existing_content:
+            print(f"  .claude/CLAUDE.md already has TTS instructions (skipped)")
+        else:
+            # Append the snippet
+            with open(claude_md_path, "a") as f:
+                f.write("\n" + CLAUDE_MD_SNIPPET)
+            print(f"  Appended TTS instructions to .claude/CLAUDE.md")
+    else:
+        claude_md_path.write_text(CLAUDE_MD_SNIPPET)
+        print(f"  Created .claude/CLAUDE.md with TTS instructions")
+
+    print(f"\nDone! SpeakUp is configured for '{project_name}'")
+    print(f"\nNext steps:")
+    print(f"  1. Restart Claude Code to load the new MCP config")
+    print(f"  2. Claude will now speak with the '{project_name}' prefix")
+
+    return 0
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -203,6 +295,17 @@ def main():
         description="SpeakUp TTS control"
     )
     subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # init command
+    init_parser = subparsers.add_parser("init", help="Initialize SpeakUp in a project")
+    init_parser.add_argument("project_name", help="Name for this project (used in announcements)")
+    init_parser.add_argument(
+        "--announce",
+        choices=["prefix", "full", "none"],
+        default="prefix",
+        help="Announcement style (default: prefix)"
+    )
+    init_parser.set_defaults(func=cmd_init)
 
     # status command
     status_parser = subparsers.add_parser("status", help="Show queue status")
