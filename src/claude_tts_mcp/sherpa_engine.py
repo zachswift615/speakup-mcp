@@ -1,9 +1,12 @@
 """Sherpa-onnx TTS engine wrapper."""
 
+from typing import Callable
 import numpy as np
 import sherpa_onnx
 
 from .tone_mapper import ToneParams
+
+AudioCallback = Callable[[np.ndarray], bool]
 
 
 class SherpaEngine:
@@ -47,8 +50,31 @@ class SherpaEngine:
         self._tts = sherpa_onnx.OfflineTts(tts_config)
         self._loaded = self._tts is not None
 
+    def synthesize_streaming(
+        self, text: str, params: ToneParams, callback: AudioCallback
+    ) -> None:
+        """Synthesize text to audio with streaming callback.
+
+        Args:
+            text: Text to synthesize
+            params: Tone parameters for synthesis
+            callback: Called with audio chunks as they're generated.
+                      Return True to continue, False to stop.
+        """
+        if not text.strip():
+            return
+
+        speed = 1.0 / params.length_scale
+
+        def sherpa_callback(samples: np.ndarray, progress: float) -> int:
+            samples_float = np.array(samples, dtype=np.float32)
+            should_continue = callback(samples_float)
+            return 1 if should_continue else 0
+
+        self._tts.generate(text=text, sid=0, speed=speed, callback=sherpa_callback)
+
     def synthesize(self, text: str, params: ToneParams) -> tuple[np.ndarray, int]:
-        """Synthesize text to audio.
+        """Synthesize text to audio (non-streaming).
 
         Args:
             text: Text to synthesize
@@ -60,11 +86,8 @@ class SherpaEngine:
         if not text.strip():
             return np.array([], dtype=np.float32), self.sample_rate
 
-        # length_scale affects speed inversely in sherpa-onnx
         speed = 1.0 / params.length_scale
-
         audio = self._tts.generate(text=text, sid=0, speed=speed)
-
         samples = np.array(audio.samples, dtype=np.float32)
         return samples, self.sample_rate
 

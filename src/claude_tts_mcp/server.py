@@ -4,14 +4,14 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .tone_mapper import ToneMapper
-from .audio_player import AudioPlayer
+from .streaming_player import StreamingPlayer
 from .sherpa_engine import SherpaEngine
 from .voice_manager import VoiceManager
 
 # Global instances (initialized lazily)
 _voice_manager: Optional[VoiceManager] = None
 _engine: Optional[SherpaEngine] = None
-_player: Optional[AudioPlayer] = None
+_player: Optional[StreamingPlayer] = None
 _tone_mapper: Optional[ToneMapper] = None
 
 
@@ -23,7 +23,7 @@ def _init_globals():
         _tone_mapper = ToneMapper()
 
     if _player is None:
-        _player = AudioPlayer()
+        _player = StreamingPlayer()
 
     if _voice_manager is None:
         _voice_manager = VoiceManager()
@@ -74,11 +74,14 @@ def speak(
     # Get tone parameters
     params = _tone_mapper.get_params(tone, speed=speed)
 
-    # Synthesize audio
-    samples, sample_rate = _engine.synthesize(text, params)
+    # Start streaming player
+    _player.start(_engine.sample_rate)
 
-    # Play audio
-    duration_ms = _player.play(samples, sample_rate, interrupt=False)
+    # Synthesize with streaming - audio plays as it's generated
+    _engine.synthesize_streaming(text, params, callback=_player.feed)
+
+    # Wait for playback to complete
+    duration_ms = _player.finish()
 
     return {"success": True, "duration_ms": duration_ms}
 

@@ -14,16 +14,17 @@ class TestServerTools:
     def mock_engine(self):
         """Create a mock SherpaEngine."""
         engine = MagicMock()
-        engine.synthesize.return_value = (np.zeros(22050, dtype=np.float32), 22050)
+        engine.sample_rate = 22050
         engine.is_loaded = True
         return engine
 
     @pytest.fixture
     def mock_player(self):
-        """Create a mock AudioPlayer."""
+        """Create a mock StreamingPlayer."""
         player = MagicMock()
-        player.play.return_value = 1000.0  # 1 second duration
+        player.finish.return_value = 1000.0  # 1 second duration
         player.is_playing.return_value = False
+        player.feed.return_value = True
         return player
 
     @pytest.fixture
@@ -56,8 +57,9 @@ class TestServerTools:
 
             assert result["success"] is True
             assert "duration_ms" in result
-            mock_engine.synthesize.assert_called_once()
-            mock_player.play.assert_called_once()
+            mock_engine.synthesize_streaming.assert_called_once()
+            mock_player.start.assert_called_once()
+            mock_player.finish.assert_called_once()
 
     def test_speak_uses_tone_mapper(self, mock_engine, mock_player, mock_voice_manager, tone_mapper):
         """speak() should pass tone to ToneMapper."""
@@ -68,8 +70,8 @@ class TestServerTools:
 
             speak(text="Exciting news!", tone="excited")
 
-            # Verify synthesize was called with params that have excited characteristics
-            call_args = mock_engine.synthesize.call_args
+            # Verify synthesize_streaming was called with params that have excited characteristics
+            call_args = mock_engine.synthesize_streaming.call_args
             params = call_args.args[1]  # Second arg is ToneParams
             # Excited tone should have length_scale < 1.0 (faster)
             assert params.length_scale < 1.0
@@ -83,7 +85,7 @@ class TestServerTools:
 
             speak(text="Fast talking", speed=2.0)
 
-            call_args = mock_engine.synthesize.call_args
+            call_args = mock_engine.synthesize_streaming.call_args
             params = call_args.args[1]
             # Speed 2.0 should halve the length_scale
             assert params.length_scale == pytest.approx(0.5, rel=0.01)
@@ -143,7 +145,7 @@ class TestServerInitialization:
         """create_server should return a FastMCP instance."""
         with patch("claude_tts_mcp.server.VoiceManager"), \
              patch("claude_tts_mcp.server.SherpaEngine"), \
-             patch("claude_tts_mcp.server.AudioPlayer"):
+             patch("claude_tts_mcp.server.StreamingPlayer"):
 
             server = create_server()
 
