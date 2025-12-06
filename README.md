@@ -93,6 +93,56 @@ speak(text="Quick update", speed=1.5)
 stop()
 ```
 
+## CLAUDE.md Integration
+
+Add this to your project's `CLAUDE.md` to encourage Claude to use TTS effectively:
+
+```markdown
+## Voice/TTS (Text-to-Speech)
+
+Use `mcp__tts__speak_tool` to speak to the user aloud. Use it liberally - for thinking
+out loud, narrating what you're doing, conversing naturally, or any time voice adds to
+the experience.
+
+**Parameters:**
+- `text` (required): What to say
+- `tone`: neutral | excited | concerned | calm | urgent (default: neutral)
+- `speed`: 0.5 to 2.0 (default: 1.0)
+- `interrupt`: Stop current speech before starting (default: true)
+
+**Example uses:**
+- Thinking through a problem out loud
+- Announcing task completion or updates
+- Reading errors or warnings aloud
+- Conversational back-and-forth
+
+**Tone guide:**
+- `calm` - explanations, walkthroughs
+- `urgent` - errors, critical issues
+- `excited` - successes, good news
+- `concerned` - warnings, risky operations
+
+Use `mcp__tts__stop_tool` to stop speech mid-playback.
+```
+
+## Why Use This?
+
+### Token Efficient
+
+The MCP interface is designed to be minimal:
+- **Tool definitions**: ~60 words total for both tools
+- **Responses**: `{"success": true, "duration_ms": 1234}` (~40 characters)
+
+No verbose payloads, no unnecessary metadata - just the essentials.
+
+### Subagent Visibility
+
+When using subagent-driven development, you typically have limited visibility into what agents are doing. With TTS instructions in your CLAUDE.md, subagents announce their progress as they work - giving you real-time audio feedback on task execution without needing to watch the terminal.
+
+### Streaming Playback
+
+Audio begins playing immediately as it's synthesized, rather than waiting for full generation. This reduces time-to-first-sound significantly for longer text.
+
 ### Tones
 
 | Tone | Effect |
@@ -117,11 +167,11 @@ pytest tests/test_tone_mapper.py -v
 
 ```
 src/claude_tts_mcp/
-├── server.py          # MCP server entry point
-├── tone_mapper.py     # Tone → parameter mapping
-├── sherpa_engine.py   # sherpa-onnx wrapper
-├── audio_player.py    # sounddevice playback
-└── voice_manager.py   # Voice path management
+├── server.py           # MCP server entry point
+├── tone_mapper.py      # Tone → parameter mapping
+├── sherpa_engine.py    # sherpa-onnx wrapper
+├── streaming_player.py # Streaming audio playback
+└── voice_manager.py    # Voice path management
 ```
 
 ## Requirements
