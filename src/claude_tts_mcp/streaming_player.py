@@ -35,11 +35,16 @@ class StreamingPlayer:
             self._total_samples = 0
             self._playing = True
 
+            # Always query the current default device to handle
+            # Bluetooth headphones connecting/disconnecting
+            default_device = sd.default.device[1]  # [1] is output device
+
             self._stream = sd.OutputStream(
                 samplerate=sample_rate,
                 channels=1,
                 dtype=np.float32,
                 blocksize=1024,
+                device=default_device,
             )
             self._stream.start()
 
