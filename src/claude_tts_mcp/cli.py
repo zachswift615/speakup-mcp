@@ -227,6 +227,51 @@ def cmd_service(args):
             return 1
 
 
+def get_mcp_server_config(project_name: str, announce: str) -> dict:
+    """Get the MCP server configuration based on install type.
+
+    Returns config that works for:
+    - Bundled binary: uses the speakup executable directly
+    - Source install: uses the venv python
+    """
+    if is_bundled_mode():
+        # Bundled binary - use the executable directly
+        return {
+            "command": sys.executable,
+            "args": ["--mcp-server"],
+            "env": {
+                "SPEAKUP_PROJECT": project_name,
+                "SPEAKUP_ANNOUNCE": announce
+            }
+        }
+    else:
+        # Source install - need to use the venv python
+        # The speakup CLI is a wrapper script that activates the venv
+        # We need to find the actual venv python
+        speakup_home = Path.home() / ".speakup"
+        venv_python = speakup_home / "src" / "venv" / "bin" / "python"
+
+        if venv_python.exists():
+            return {
+                "command": str(venv_python),
+                "args": ["-m", "claude_tts_mcp.server"],
+                "env": {
+                    "SPEAKUP_PROJECT": project_name,
+                    "SPEAKUP_ANNOUNCE": announce
+                }
+            }
+        else:
+            # Fallback: assume python has claude_tts_mcp installed globally
+            return {
+                "command": "python",
+                "args": ["-m", "claude_tts_mcp.server"],
+                "env": {
+                    "SPEAKUP_PROJECT": project_name,
+                    "SPEAKUP_ANNOUNCE": announce
+                }
+            }
+
+
 def cmd_init(args):
     """Initialize SpeakUp in a project directory."""
     project_name = args.project_name
@@ -252,14 +297,7 @@ def cmd_init(args):
         mcp_config["mcpServers"] = {}
 
     # Add or update tts server config
-    mcp_config["mcpServers"]["tts"] = {
-        "command": "python",
-        "args": ["-m", "claude_tts_mcp.server"],
-        "env": {
-            "SPEAKUP_PROJECT": project_name,
-            "SPEAKUP_ANNOUNCE": announce
-        }
-    }
+    mcp_config["mcpServers"]["tts"] = get_mcp_server_config(project_name, announce)
 
     mcp_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
     print(f"  Updated .mcp.json with TTS config")
