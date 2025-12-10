@@ -55,7 +55,6 @@ jobs:
             --assume-yes-for-downloads \
             --macos-create-app-bundle \
             --macos-app-name=${{ env.APP_NAME }} \
-            --macos-app-icon=macos/speakup.icns \
             src/claude_tts_mcp/cli.py
 
       - name: Import Code Signing Certificate
@@ -200,7 +199,6 @@ jobs:
             --assume-yes-for-downloads \
             --macos-create-app-bundle \
             --macos-app-name=${{ env.APP_NAME }} \
-            --macos-app-icon=macos/speakup.icns \
             src/claude_tts_mcp/cli.py
 
       - name: Import Code Signing Certificate
