@@ -6,17 +6,8 @@ import numpy as np
 import sounddevice as sd
 
 
-def refresh_audio_devices() -> None:
-    """Refresh sounddevice's audio device list.
-
-    Call this ONLY when no audio streams are active, as it
-    terminates and reinitializes PortAudio.
-    """
-    try:
-        sd._terminate()
-        sd._initialize()
-    except Exception:
-        pass
+# Track the last used device to detect changes
+_last_device_name: str | None = None
 
 
 def get_current_output_device() -> tuple[int, str]:
@@ -24,6 +15,35 @@ def get_current_output_device() -> tuple[int, str]:
     device_idx = sd.default.device[1]
     device_info = sd.query_devices(device_idx)
     return device_idx, device_info['name']
+
+
+def get_output_device_with_refresh() -> tuple[int, str]:
+    """Get output device, refreshing device list only if device changed.
+
+    This avoids calling sd._terminate() on every playback, which would
+    kill any audio streams that are still flushing.
+    """
+    global _last_device_name
+
+    # First, get what sounddevice currently thinks is the default
+    try:
+        current_idx, current_name = get_current_output_device()
+    except Exception:
+        current_name = None
+        current_idx = None
+
+    # If this is first call or device name changed, refresh the device list
+    # to pick up any newly connected Bluetooth devices
+    if _last_device_name is None or current_name != _last_device_name:
+        try:
+            sd._terminate()
+            sd._initialize()
+            current_idx, current_name = get_current_output_device()
+        except Exception:
+            pass
+
+    _last_device_name = current_name
+    return current_idx, current_name
 
 
 class StreamingPlayer:
@@ -55,12 +75,9 @@ class StreamingPlayer:
             self._total_samples = 0
             self._playing = True
 
-            # Refresh device list before starting playback
-            # This picks up Bluetooth headphones that connected since last playback
-            refresh_audio_devices()
-
-            # Get the current default output device
-            default_device, device_name = get_current_output_device()
+            # Get output device, only refreshing if device changed
+            # This avoids killing streams that might still be flushing
+            default_device, device_name = get_output_device_with_refresh()
 
             self._stream = sd.OutputStream(
                 samplerate=sample_rate,
