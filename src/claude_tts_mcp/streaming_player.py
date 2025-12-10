@@ -2,107 +2,28 @@
 
 import queue
 import threading
-import time
 import numpy as np
 import sounddevice as sd
 
 
-class AudioDeviceMonitor:
-    """Monitors for audio device changes and refreshes sounddevice when needed."""
+def refresh_audio_devices() -> None:
+    """Refresh sounddevice's audio device list.
 
-    def __init__(self, check_interval: float = 2.0):
-        self._check_interval = check_interval
-        self._running = False
-        self._thread: threading.Thread | None = None
-        self._last_default_device: int | None = None
-        self._last_device_count: int = 0
-        self._lock = threading.Lock()
-
-    def start(self) -> None:
-        """Start monitoring for device changes."""
-        with self._lock:
-            if self._running:
-                return
-            self._running = True
-            self._snapshot_devices()
-            self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
-            self._thread.start()
-
-    def stop(self) -> None:
-        """Stop monitoring."""
-        with self._lock:
-            self._running = False
-        if self._thread:
-            self._thread.join(timeout=1.0)
-
-    def refresh_devices(self) -> None:
-        """Force refresh of audio device list."""
-        try:
-            sd._terminate()
-            sd._initialize()
-        except Exception:
-            pass
-
-    def get_current_output_device(self) -> tuple[int, str]:
-        """Get current default output device (index, name)."""
-        device_idx = sd.default.device[1]
-        device_info = sd.query_devices(device_idx)
-        return device_idx, device_info['name']
-
-    def _snapshot_devices(self) -> None:
-        """Take a snapshot of current device state."""
-        try:
-            devices = sd.query_devices()
-            self._last_device_count = len(devices)
-            self._last_default_device = sd.default.device[1]
-        except Exception:
-            pass
-
-    def _check_for_changes(self) -> bool:
-        """Check if devices have changed. Returns True if changed."""
-        try:
-            # Force sounddevice to refresh its device list
-            sd._terminate()
-            sd._initialize()
-
-            devices = sd.query_devices()
-            current_count = len(devices)
-            current_default = sd.default.device[1]
-
-            changed = (
-                current_count != self._last_device_count or
-                current_default != self._last_default_device
-            )
-
-            if changed:
-                self._last_device_count = current_count
-                self._last_default_device = current_default
-
-            return changed
-
-        except Exception:
-            return False
-
-    def _monitor_loop(self) -> None:
-        """Background thread that monitors for device changes."""
-        while self._running:
-            time.sleep(self._check_interval)
-            if not self._running:
-                break
-            self._check_for_changes()
+    Call this ONLY when no audio streams are active, as it
+    terminates and reinitializes PortAudio.
+    """
+    try:
+        sd._terminate()
+        sd._initialize()
+    except Exception:
+        pass
 
 
-# Global device monitor instance
-_device_monitor: AudioDeviceMonitor | None = None
-
-
-def get_device_monitor() -> AudioDeviceMonitor:
-    """Get or create the global device monitor."""
-    global _device_monitor
-    if _device_monitor is None:
-        _device_monitor = AudioDeviceMonitor()
-        _device_monitor.start()
-    return _device_monitor
+def get_current_output_device() -> tuple[int, str]:
+    """Get current default output device (index, name)."""
+    device_idx = sd.default.device[1]
+    device_info = sd.query_devices(device_idx)
+    return device_idx, device_info['name']
 
 
 class StreamingPlayer:
@@ -134,12 +55,12 @@ class StreamingPlayer:
             self._total_samples = 0
             self._playing = True
 
-            # Ensure device monitor is running - this keeps the device list fresh
-            # even when Bluetooth headphones connect/disconnect
-            monitor = get_device_monitor()
+            # Refresh device list before starting playback
+            # This picks up Bluetooth headphones that connected since last playback
+            refresh_audio_devices()
 
             # Get the current default output device
-            default_device, device_name = monitor.get_current_output_device()
+            default_device, device_name = get_current_output_device()
 
             self._stream = sd.OutputStream(
                 samplerate=sample_rate,
