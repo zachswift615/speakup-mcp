@@ -83,19 +83,22 @@ jobs:
           APP_BUNDLE=$(find build -name "*.app" -type d | head -1)
           echo "Signing: $APP_BUNDLE"
 
-          # Sign all frameworks and dylibs first
-          find "$APP_BUNDLE" -name "*.dylib" -o -name "*.so" | while read lib; do
+          # Sign all binaries (dylibs, so files, and executables)
+          # Use -type f to skip directories like _sounddevice_data
+          find "$APP_BUNDLE" -type f \( -name "*.dylib" -o -name "*.so" \) | while read lib; do
             codesign --force --options runtime \
               --sign "$SIGNING_IDENTITY" \
               --entitlements macos/speakup.entitlements \
               "$lib"
           done
 
-          # Sign the main executable
-          codesign --force --options runtime \
-            --sign "$SIGNING_IDENTITY" \
-            --entitlements macos/speakup.entitlements \
-            "$APP_BUNDLE/Contents/MacOS/"*
+          # Sign executables in MacOS dir (files only, skip directories)
+          find "$APP_BUNDLE/Contents/MacOS" -type f | while read exe; do
+            codesign --force --options runtime \
+              --sign "$SIGNING_IDENTITY" \
+              --entitlements macos/speakup.entitlements \
+              "$exe"
+          done
 
           # Sign the app bundle
           codesign --force --deep --options runtime \
