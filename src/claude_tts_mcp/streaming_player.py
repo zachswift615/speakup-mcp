@@ -17,11 +17,35 @@ def get_current_output_device() -> tuple[int, str]:
     return device_idx, device_info['name']
 
 
-def get_output_device_with_refresh() -> tuple[int, str]:
-    """Get output device, refreshing device list only if device changed.
+def get_system_default_output() -> str | None:
+    """Query macOS for the actual system default output device name."""
+    import subprocess
+    try:
+        # Use system_profiler to get current audio output
+        result = subprocess.run(
+            ['system_profiler', 'SPAudioDataType', '-json'],
+            capture_output=True, text=True, timeout=2
+        )
+        if result.returncode == 0:
+            import json
+            data = json.loads(result.stdout)
+            audio_data = data.get('SPAudioDataType', [])
+            for item in audio_data:
+                devices = item.get('_items', [])
+                for device in devices:
+                    # Look for default output device
+                    if device.get('coreaudio_default_audio_output_device') == 'spaudio_yes':
+                        return device.get('_name')
+    except Exception:
+        pass
+    return None
 
-    This avoids calling sd._terminate() on every playback, which would
-    kill any audio streams that are still flushing.
+
+def get_output_device_with_refresh() -> tuple[int, str]:
+    """Get output device, refreshing device list if system default changed.
+
+    This checks the actual macOS system default and refreshes sounddevice's
+    cached device list when a new device is plugged in (like headphones).
     """
     global _last_device_name
 
@@ -32,9 +56,17 @@ def get_output_device_with_refresh() -> tuple[int, str]:
         current_name = None
         current_idx = None
 
-    # If this is first call or device name changed, refresh the device list
-    # to pick up any newly connected Bluetooth devices
-    if _last_device_name is None or current_name != _last_device_name:
+    # Check the actual macOS system default
+    system_default = get_system_default_output()
+
+    # Refresh if: first call, sounddevice name changed, OR system default differs
+    needs_refresh = (
+        _last_device_name is None or
+        current_name != _last_device_name or
+        (system_default and system_default != current_name)
+    )
+
+    if needs_refresh:
         try:
             sd._terminate()
             sd._initialize()

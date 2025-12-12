@@ -161,6 +161,23 @@ def cmd_stop(args):
     return 0
 
 
+def cmd_web(args):
+    """Open the web UI in the default browser."""
+    import webbrowser
+
+    if not is_service_running():
+        print("Service is not running. Starting it...")
+        # Start service first
+        result = cmd_service(argparse.Namespace(action="start"))
+        if result != 0:
+            return result
+
+    url = f"http://127.0.0.1:{DEFAULT_PORT}"
+    print(f"Opening {url}")
+    webbrowser.open(url)
+    return 0
+
+
 def cmd_service(args):
     """Start the service."""
     if args.action == "start":
@@ -393,6 +410,10 @@ def main():
         help="Service action"
     )
     service_parser.set_defaults(func=cmd_service)
+
+    # web command
+    web_parser = subparsers.add_parser("web", help="Open the web UI in browser")
+    web_parser.set_defaults(func=cmd_web)
 
     args = parser.parse_args()
 

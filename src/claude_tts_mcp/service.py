@@ -229,6 +229,21 @@ WEB_UI_HTML = """<!DOCTYPE html>
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            cursor: pointer;
+        }
+        .message-text.expanded {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .message-text.truncated::after {
+            content: ' ▶';
+            color: #666;
+            font-size: 0.7rem;
+        }
+        .message-text.expanded::after {
+            content: ' ▼';
+            color: #666;
+            font-size: 0.7rem;
         }
         .message-meta {
             font-size: 0.75rem;
@@ -258,6 +273,38 @@ WEB_UI_HTML = """<!DOCTYPE html>
             font-size: 0.8rem;
             margin-left: 8px;
         }
+        .filter-bar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .filter-label {
+            font-size: 0.75rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .filter-chip {
+            background: #0f3460;
+            border: 1px solid #1a4a7a;
+            color: #ccc;
+            padding: 4px 10px;
+            border-radius: 16px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .filter-chip:hover {
+            background: #1a4a7a;
+            color: #fff;
+        }
+        .filter-chip.active {
+            background: #4fc3f7;
+            border-color: #4fc3f7;
+            color: #1a1a2e;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
@@ -279,11 +326,19 @@ WEB_UI_HTML = """<!DOCTYPE html>
 
         <section>
             <div class="section-title">History</div>
+            <div id="filter-bar" class="filter-bar" style="margin-bottom: 10px;"></div>
             <div id="history"></div>
         </section>
     </div>
 
     <script>
+        // Track expanded messages by their ID
+        const expandedMessages = new Set();
+        // Track filter state
+        let activeProjectFilter = null;
+        let allProjects = new Set();
+        let lastHistoryMessages = [];
+
         async function fetchStatus() {
             try {
                 const res = await fetch('/api/status');
@@ -300,18 +355,65 @@ WEB_UI_HTML = """<!DOCTYPE html>
             try {
                 const res = await fetch('/api/history');
                 const data = await res.json();
+                lastHistoryMessages = data.messages;
+                updateFilterBar(data.messages);
                 updateHistory(data.messages);
             } catch (e) {
                 console.error('Failed to fetch history:', e);
             }
         }
 
+        function updateFilterBar(messages) {
+            // Collect unique projects
+            const projects = new Set();
+            messages.forEach(m => {
+                if (m.project) projects.add(m.project);
+            });
+
+            // Only update if projects changed
+            const projectsArray = Array.from(projects).sort();
+            const currentArray = Array.from(allProjects).sort();
+            if (JSON.stringify(projectsArray) === JSON.stringify(currentArray)) {
+                return; // No change
+            }
+
+            allProjects = projects;
+            const el = document.getElementById('filter-bar');
+
+            if (projects.size <= 1) {
+                el.innerHTML = '';
+                return;
+            }
+
+            let html = '<span class="filter-label">Filter:</span>';
+            html += `<span class="filter-chip ${activeProjectFilter === null ? 'active' : ''}" onclick="setFilter(null)">All</span>`;
+            projectsArray.forEach(p => {
+                const activeClass = activeProjectFilter === p ? 'active' : '';
+                html += `<span class="filter-chip ${activeClass}" onclick="setFilter('${esc(p)}')">${esc(p)}</span>`;
+            });
+            el.innerHTML = html;
+        }
+
+        function setFilter(project) {
+            activeProjectFilter = project;
+            // Update filter bar UI
+            document.querySelectorAll('.filter-chip').forEach(chip => {
+                const chipProject = chip.textContent === 'All' ? null : chip.textContent;
+                chip.classList.toggle('active', chipProject === project);
+            });
+            // Re-render history with filter
+            updateHistory(lastHistoryMessages);
+        }
+
         function updatePlaying(playing) {
             const el = document.getElementById('now-playing');
             if (playing) {
                 el.className = 'now-playing';
+                const msgId = 'playing-' + playing.id;
+                const isExpanded = expandedMessages.has(msgId);
+                const textClass = isExpanded ? 'expanded' : (playing.text.length > 80 ? 'truncated' : '');
                 el.innerHTML = `<span class="message-project">${esc(playing.project)}</span>
-                    <div class="message-text">${esc(playing.text)}</div>`;
+                    <div class="message-text ${textClass}" data-msg-id="${msgId}" onclick="toggleExpand(this)">${esc(playing.text)}</div>`;
             } else {
                 el.className = 'now-playing empty';
                 el.textContent = 'Nothing playing';
@@ -324,29 +426,59 @@ WEB_UI_HTML = """<!DOCTYPE html>
                 el.innerHTML = '<div class="empty-state">Queue is empty</div>';
                 return;
             }
-            el.innerHTML = queued.map(m => `
+            el.innerHTML = queued.map(m => {
+                const msgId = 'queue-' + m.id;
+                const isExpanded = expandedMessages.has(msgId);
+                const textClass = isExpanded ? 'expanded' : (m.text.length > 80 ? 'truncated' : '');
+                return `
                 <div class="message">
                     <span class="message-project">${esc(m.project)}</span>
-                    <div class="message-text">${esc(m.text)}</div>
+                    <div class="message-text ${textClass}" data-msg-id="${msgId}" onclick="toggleExpand(this)">${esc(m.text)}</div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         function updateHistory(messages) {
             const el = document.getElementById('history');
-            const played = messages.filter(m => m.status !== 'queued');
+            let played = messages.filter(m => m.status !== 'queued');
+
+            // Apply project filter
+            if (activeProjectFilter !== null) {
+                played = played.filter(m => m.project === activeProjectFilter);
+            }
+
             if (played.length === 0) {
-                el.innerHTML = '<div class="empty-state">No history yet</div>';
+                const filterNote = activeProjectFilter ? ` for "${activeProjectFilter}"` : '';
+                el.innerHTML = `<div class="empty-state">No history${filterNote}</div>`;
                 return;
             }
-            el.innerHTML = played.slice(0, 20).map(m => `
+            el.innerHTML = played.slice(0, 20).map(m => {
+                const msgId = 'history-' + m.id;
+                const isExpanded = expandedMessages.has(msgId);
+                const textClass = isExpanded ? 'expanded' : (m.text.length > 80 ? 'truncated' : '');
+                return `
                 <div class="message">
                     <span class="message-project">${esc(m.project)}</span>
                     <span class="status-badge status-${m.status}">${m.status}</span>
-                    <div class="message-text">${esc(m.text)}</div>
+                    <div class="message-text ${textClass}" data-msg-id="${msgId}" onclick="toggleExpand(this)">${esc(m.text)}</div>
                     <div class="message-meta">${formatTime(m.created_at)}</div>
                 </div>
-            `).join('');
+            `}).join('');
+        }
+
+        function toggleExpand(el) {
+            const msgId = el.dataset.msgId;
+            if (el.classList.contains('expanded')) {
+                el.classList.remove('expanded');
+                expandedMessages.delete(msgId);
+                if (el.textContent.length > 80) {
+                    el.classList.add('truncated');
+                }
+            } else {
+                el.classList.remove('truncated');
+                el.classList.add('expanded');
+                expandedMessages.add(msgId);
+            }
         }
 
         async function stopAll() {
