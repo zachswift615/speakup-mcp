@@ -8,7 +8,7 @@ the experience.
 - `text` (required): What to say
 - `tone`: neutral | excited | concerned | calm | urgent (default: neutral)
 - `speed`: 0.5 to 2.0 (default: 1.0)
-- `interrupt`: Stop current speech before starting (default: true)
+- `interrupt`: Stop current speech before starting (default: false - messages queue up)
 
 **Example uses:**
 - Thinking through a problem out loud

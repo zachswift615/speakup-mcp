@@ -202,6 +202,18 @@ class StreamingPlayer:
             except sd.PortAudioError:
                 break
 
+        # Wait for the stream buffer to drain before returning
+        # This prevents the next message from cutting off the tail of this one
+        if self._stream is not None and not self._interrupted:
+            try:
+                # Calculate remaining buffer time and wait
+                # blocksize=1024 at 22050 Hz = ~46ms per block
+                # Give it a bit extra to ensure complete playback
+                import time
+                time.sleep(0.15)  # 150ms should cover the buffer
+            except Exception:
+                pass
+
     def _cleanup(self) -> None:
         """Clean up stream resources. Must be called with lock held."""
         if self._stream is not None:
