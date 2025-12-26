@@ -77,7 +77,7 @@ def speak(
     text: str,
     tone: str = "neutral",
     speed: float = 1.0,
-    interrupt: bool = True,
+    interrupt: bool = False,
 ) -> dict:
     """Speak text aloud with optional emotional tone.
 
@@ -85,7 +85,7 @@ def speak(
         text: Text to speak
         tone: Emotional tone (neutral, excited, concerned, calm, urgent)
         speed: Speech rate multiplier (0.5-2.0, default 1.0)
-        interrupt: If True, stops any current speech before starting
+        interrupt: If True, stops any current speech before starting (default: False - messages queue up)
 
     Returns:
         Dict with success status and queue position
@@ -155,7 +155,7 @@ def create_server() -> FastMCP:
         text: str,
         tone: str = "neutral",
         speed: float = 1.0,
-        interrupt: bool = True,
+        interrupt: bool = False,
     ) -> dict:
         """Speak text aloud with optional emotional tone.
 
@@ -163,7 +163,7 @@ def create_server() -> FastMCP:
             text: Text to speak
             tone: Emotional tone (neutral, excited, concerned, calm, urgent)
             speed: Speech rate multiplier (0.5-2.0, default 1.0)
-            interrupt: If True, stops any current speech before starting
+            interrupt: If True, stops any current speech before starting (default: False - messages queue up)
 
         Returns:
             Dict with success status and duration_ms
