@@ -6,78 +6,6 @@ import numpy as np
 import sounddevice as sd
 
 
-# Track the last used device to detect changes
-_last_device_name: str | None = None
-
-
-def get_current_output_device() -> tuple[int, str]:
-    """Get current default output device (index, name)."""
-    device_idx = sd.default.device[1]
-    device_info = sd.query_devices(device_idx)
-    return device_idx, device_info['name']
-
-
-def get_system_default_output() -> str | None:
-    """Query macOS for the actual system default output device name."""
-    import subprocess
-    try:
-        # Use system_profiler to get current audio output
-        result = subprocess.run(
-            ['system_profiler', 'SPAudioDataType', '-json'],
-            capture_output=True, text=True, timeout=2
-        )
-        if result.returncode == 0:
-            import json
-            data = json.loads(result.stdout)
-            audio_data = data.get('SPAudioDataType', [])
-            for item in audio_data:
-                devices = item.get('_items', [])
-                for device in devices:
-                    # Look for default output device
-                    if device.get('coreaudio_default_audio_output_device') == 'spaudio_yes':
-                        return device.get('_name')
-    except Exception:
-        pass
-    return None
-
-
-def get_output_device_with_refresh() -> tuple[int, str]:
-    """Get output device, refreshing device list if system default changed.
-
-    This checks the actual macOS system default and refreshes sounddevice's
-    cached device list when a new device is plugged in (like headphones).
-    """
-    global _last_device_name
-
-    # First, get what sounddevice currently thinks is the default
-    try:
-        current_idx, current_name = get_current_output_device()
-    except Exception:
-        current_name = None
-        current_idx = None
-
-    # Check the actual macOS system default
-    system_default = get_system_default_output()
-
-    # Refresh if: first call, sounddevice name changed, OR system default differs
-    needs_refresh = (
-        _last_device_name is None or
-        current_name != _last_device_name or
-        (system_default and system_default != current_name)
-    )
-
-    if needs_refresh:
-        try:
-            sd._terminate()
-            sd._initialize()
-            current_idx, current_name = get_current_output_device()
-        except Exception:
-            pass
-
-    _last_device_name = current_name
-    return current_idx, current_name
-
-
 class StreamingPlayer:
     """Streams audio chunks to output as they arrive."""
 
@@ -107,16 +35,12 @@ class StreamingPlayer:
             self._total_samples = 0
             self._playing = True
 
-            # Get output device, only refreshing if device changed
-            # This avoids killing streams that might still be flushing
-            default_device, device_name = get_output_device_with_refresh()
-
             self._stream = sd.OutputStream(
                 samplerate=sample_rate,
                 channels=1,
                 dtype=np.float32,
                 blocksize=1024,
-                device=default_device,
+                device=None,  # Use system default - let macOS handle routing
             )
             self._stream.start()
 
